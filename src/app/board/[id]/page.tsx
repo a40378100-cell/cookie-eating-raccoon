@@ -16,8 +16,33 @@ import { Modal, ConfirmModal } from '@/components/ui/Modal';
 import { GuestIdBar } from '@/components/ui/GuestId';
 import { useToast } from '@/components/ui/Toast';
 import { PageTitle } from '@/components/ui/PageText';
+import { useBlobUrl } from '@/lib/blobStore';
 
 const FOLD_LABEL = { spoiler: '스포일러 주의', adult: '수위 주의' };
+
+function formatSize(size: number) {
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${Math.round(size / 1024)} KB`;
+  return `${(size / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function AttachmentRow({ name, size, ref }: { name: string; size: number; ref: string }) {
+  const url = useBlobUrl(ref);
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '10px 12px', border: '1px solid var(--line)', borderRadius: 8 }}>
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12, fontWeight: 600 }}>{name}</div>
+        <small style={{ color: 'var(--faint)' }}>{formatSize(size)}</small>
+      </div>
+      {url ? (
+        <a className="btn btn-onbk" href={url} download={name} target="_blank" rel="noreferrer">다운로드</a>
+      ) : (
+        <span style={{ fontSize: 11, color: 'var(--faint)' }}>파일을 불러오는 중...</span>
+      )}
+    </div>
+  );
+}
 
 export default function BoardDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -169,6 +194,19 @@ export default function BoardDetailPage() {
           <div className="post-body" style={post.fold && !open ? { minHeight: 120, filter: 'blur(6px)' } : undefined}
             dangerouslySetInnerHTML={{ __html: html }} />
         </div>
+
+        {post.attachments && post.attachments.length > 0 && (
+          <div style={{ marginTop: 24, paddingTop: 18, borderTop: '1px solid var(--line)' }}>
+            <h4 style={{ fontSize: 11.5, letterSpacing: '.12em', color: 'var(--faint)', marginBottom: 10 }}>
+              ATTACHMENTS <span style={{ color: 'var(--accent)' }}>{post.attachments.length}</span>
+            </h4>
+            <div style={{ display: 'grid', gap: 7 }}>
+              {post.attachments.map(file => (
+                <AttachmentRow key={file.id} name={file.name} size={file.size} ref={file.ref} />
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* 댓글 + 대댓글 */}
