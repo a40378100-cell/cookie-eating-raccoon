@@ -23,17 +23,15 @@ export interface Comment {
 export const COMMENT_KEY = 'ohome.comments.v1';
 
 export interface CommentRow extends Comment {
-  targetId: string;
-  target: 'post' | 'road';
+  targetId: string;                 // 달린 대상(글·로드뷰 항목·감상타래·방명록)의 id
+  /** 대상 종류 — 같은 컬렉션을 나눠 쓴다 (thread·guest: v2.0 사용자 요청) */
+  target: 'post' | 'road' | 'thread' | 'guest';
 }
 
 export const COMMENT_SEED: CommentRow[] = [];
 
 export function commentsFor(
-  rows: CommentRow[],
-  target: 'post' | 'road',
-  targetId: string,
-  legacy: Comment[] = [],
+  rows: CommentRow[], target: CommentRow['target'], targetId: string, legacy: Comment[] = [],
 ): Comment[] {
   const mine = rows.filter(
     r => r.target === target && r.targetId === targetId,
@@ -90,6 +88,9 @@ export interface Post {
 
   /** 소속 게시판 */
   boardId?: string;
+
+  /** 태그 (v2.0 사용자 요청) — 기본형 목록의 작성자 왼쪽에 나열되고 검색에 걸린다 */
+  tags?: string[];
 
   /** 티켓 스킨 대표 이미지 */
   thumbSrc?: string;

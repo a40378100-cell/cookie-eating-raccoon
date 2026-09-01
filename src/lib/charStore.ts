@@ -33,6 +33,10 @@ export interface Character {
   tabs: CharTab[];       // 기본 정보 외 추가 탭
   basicHtml: string;     // 기본 정보 탭의 소개 본문 (HTML)
   visibility: Visibility;
+  /** 페이지 주소 별명 (v2.0 사용자 요청) — /chars/{별명}. 만들 때 정하는 주소(id)와 달리
+   *  **나중에 수정 화면에서 바꿀 수 있다.** 참조(자관 멤버·권한 등)는 언제나 id로 저장되므로
+   *  바꿔도 아무것도 끊어지지 않고, 옛 주소(id)로도 계속 열린다. */
+  slug?: string;
   /** 어느 캐릭터 목록 것인지 (v2.0 사용자 요청) — 없으면 기본 목록.
    *  **자관·역극이 캐릭터를 찾을 때는 소속을 보지 않는다** — 목록 화면에서만 갈린다 */
   secId?: string;
@@ -49,6 +53,8 @@ export interface Character {
   /** 상세 페이지 큰 이름의 글씨 크기 px (v2.0) — 기본 38.
    *  이름 길이가 제각각이라 자동으로 줄이면 어중간해진다. 캐릭터마다 직접 정한다. */
   nameSize?: number;
+  /** 상세 큰 이름 굵게 (v2.0 사용자 요청) — 기본 켜짐. 폰트에 따라 볼드가 안 어울릴 때 끈다 */
+  nameBold?: boolean;
   bodyFontId?: string;   // 본문 폰트 — 프로필 정보·소개 텍스트
   own: boolean;          // true = 운영자 자캐 (리스트 노출), false = 상대 캐릭터
   // 회원-캐릭터 연결 (3차, v1.9) — 상대 캐릭터에 회원 권한 부여:
@@ -78,6 +84,7 @@ export interface AuCharProfile {
   artCrop?: import("@/components/ui/CropEditor").CropValue;   // 상세 중앙 아트 위치 (v2.0)
   fontId?: string;
   nameSize?: number;     // 상세 큰 이름 크기 px (v2.0)
+  nameBold?: boolean;    // 상세 큰 이름 굵게 (v2.0 사용자 요청 — 폰트에 따라 볼드가 안 어울린다)
   bodyFontId?: string;
 }
 
@@ -106,6 +113,9 @@ export function charWithAu(c: Character, auKey?: string | null): Character {
     thumbCrop: p.thumbCrop,
     ...(p.fontId !== undefined ? { fontId: p.fontId } : {}),
     ...(p.bodyFontId !== undefined ? { bodyFontId: p.bodyFontId } : {}),
+    // nameSize는 여태 병합에 빠져 있었다 — AU에 저장은 되는데 표시가 base 크기를 따랐다 (v2.0 수정)
+    ...(p.nameSize !== undefined ? { nameSize: p.nameSize } : {}),
+    ...(p.nameBold !== undefined ? { nameBold: p.nameBold } : {}),
   };
 }
 
@@ -140,6 +150,8 @@ export interface RelMember {
   /** 멤버 카드 얼굴칸(1:1) 크롭 (v2.0) — 캐릭터의 리스트 썸네일은 3:4라
    *  정사각 칸에 그대로 쓰면 어긋난다. 자관에서 따로 잡아 저장한다. */
   faceCrop?: import('@/components/ui/CropEditor').CropValue;
+  /** 멤버 카드 이름 굵게 (v2.0 사용자 요청) — 기본 켜짐 */
+  nameBold?: boolean;
   /** 멤버 카드 이름 크기 px (v2.0) — 기본 17. 카드 폭이 좁아 이름마다 알맞은 크기가 다르다 */
   nameSize?: number;
   quoteColor?: string;           // 히어로 대사 글씨색 (페어, v1.9 — 기본 #d7dae0)
@@ -215,8 +227,12 @@ export interface RelAuMember {
   fullOffX?: number;
   fullOffY?: number;
   nameSize?: number;
+  nameBold?: boolean;
   quoteColor?: string;
   quoteMarkColor?: string;
+  /** 멤버 카드 얼굴칸 위치 — AU마다 따로 (v2.0 사용자 제보 — 원본에서 바꾸면 AU도 같이 바뀌었다).
+   *  안 정한 AU는 자관 기본(faceCrop)을 그대로 따른다 */
+  faceCrop?: import('@/components/ui/CropEditor').CropValue;
 }
 
 /** 이 AU에서 이 멤버를 어떻게 보여 줄지 — AU에 정해 둔 값이 있으면 그것, 없으면 자관 기본.
@@ -322,10 +338,17 @@ export interface RelAu {
   headerCrop?: import("@/components/ui/CropEditor").CropValue;
   // AU별 페이지 테마 (v1.9 사용자 확정) — 미지정이면 base(원본) 테마 따라가기
   theme?: { mode: 'site' | 'custom'; color?: string; tone?: 'dark' | 'light' };
+  /** 상세 하단의 역극/로그 연동 리스트 숨김 (v2.0 사용자 요청) — AU마다 따로.
+   *  원본(base)의 설정은 aus의 base 항목에 담긴다 */
+  hideRp?: boolean;
+  hideLog?: boolean;
 }
 
 export interface Relation {
   id: string;
+  /** 페이지 주소 별명 (v2.0 사용자 요청) — /rels/{별명}. 나중에 수정 화면에서 바꿀 수 있다.
+   *  참조(AU 프로필 키·로그 연동 등)는 언제나 id로 저장되므로 바꿔도 끊어지지 않는다. */
+  slug?: string;
   name: string;
   catchphrase: string;
   kind?: 'pair' | 'multi';         // 페어(2인) / 다인(3인+) — 등록 시 선택
@@ -385,3 +408,12 @@ export const CHAR_SEED: Character[] = [];
 export const REL_SEED: Relation[] = [];
 
 export const findChar = (chars: Character[], id: string) => chars.find(c => c.id === id);
+
+/* ---------- 페이지 주소 별명 (v2.0 사용자 요청) ---------- */
+/** 주소로 항목 찾기 — id로도, 별명으로도 열린다 (별명을 바꿔도 옛 주소가 살아 있게) */
+export const findByKey = <T extends { id: string; slug?: string }>(list: T[], key: string) =>
+  list.find(x => x.id === key || (x.slug ?? '') === key);
+/** 이 캐릭터의 주소 — 별명을 정했으면 그것, 아니면 id */
+export const charPath = (c: { id: string; slug?: string }) => `/chars/${c.slug?.trim() || c.id}`;
+/** 이 자관의 주소 — 별명을 정했으면 그것, 아니면 id */
+export const relPath = (r: { id: string; slug?: string }) => `/rels/${r.slug?.trim() || r.id}`;

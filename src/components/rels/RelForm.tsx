@@ -8,7 +8,7 @@ import { ColorField } from '@/components/ui/ColorField';
 import { isValidSlug, slugify } from '@/lib/link';
 import { CP_LABEL } from '@/lib/relqStore';
 import { newId } from '@/lib/postStore';
-import { useFonts } from '@/lib/fontStore';
+import { useFonts, deVarFamily } from '@/lib/fontStore';
 import { putBlob, getBlob, useBlobUrl } from '@/lib/blobStore';
 import { KInput, KSelect, KCheck, KStep } from '@/components/ui/Kit';
 import { CropEditor, CropValue, CropImg } from '@/components/ui/CropEditor';
@@ -55,6 +55,7 @@ export interface RelFormValue {
   fullOffsets?: Record<string, { x: number; y: number }>; // 전신 위치 오프셋 % (드래그, v1.9)
   quotes?: Record<string, string>;                              // 히어로 좌/우 한마디 문구 (v2.0)
   nameSizes?: Record<string, number>;                           // 멤버 카드 이름 크기 px (v2.0)
+  nameBolds?: Record<string, boolean>;                          // 멤버 카드 이름 볼드 (v2.0 — 기본 켜짐)
   quoteColors?: Record<string, { fg?: string; mark?: string }>; // 히어로 대사 글씨/따옴표색 (페어, v1.9)
   fullFront?: string;                          // 앞에 보일 캐릭터 id
   auName?: string;           // AU별 자관명 (v2.0 사용자 요청 — AU 편집일 때만)
@@ -171,7 +172,8 @@ export function RelForm({ initial, auId, myChars, memberNames, existingIds, onSa
 
   const [kind, setKind] = useState<'pair' | 'multi'>(initial?.kind ?? 'pair');
   const [name, setName] = useState(initial?.name ?? '');
-  const [slug, setSlug] = useState('');   // 페이지 주소 /rels/{slug} (v1.9 — 신규 등록, 비우면 자동)
+  // 페이지 주소 /rels/{slug} — 신규는 비우면 자동(id). 수정에서도 바꿀 수 있다 (v2.0 사용자 요청)
+  const [slug, setSlug] = useState(initial?.slug ?? '');
   const [catchphrase, setCatchphrase] = useState(auObj ? auObj.catchphrase : (initial?.catchphrase ?? ''));
   const [visibility, setVisibility] = useState<Visibility>(initial?.visibility ?? 'public');
   const [cp, setCp] = useState<RelCpTag>(initial?.cp ?? 'cp');   // CP/NCP (v1.9)
@@ -254,6 +256,9 @@ export function RelForm({ initial, auId, myChars, memberNames, existingIds, onSa
   // 멤버 카드 이름 크기 (v2.0) — 카드 폭이 좁아 이름마다 알맞은 크기가 다르다
   const [nameSizes, setNameSizes] = useState<Record<string, number>>(
     () => Object.fromEntries(pairMembers.map(m => [m.charId, mOf(m).nameSize ?? 17])));
+  // 이름 볼드 (v2.0 사용자 요청) — 폰트에 따라 볼드가 어색한 경우가 있어 끌 수 있게. 기본은 볼드
+  const [nameBolds, setNameBolds] = useState<Record<string, boolean>>(
+    () => Object.fromEntries(pairMembers.map(m => [m.charId, mOf(m).nameBold ?? true])));
   // 히어로 대사 글씨/따옴표색 (페어, v1.9)
   const [quoteColors, setQuoteColors] = useState<Record<string, { fg?: string; mark?: string }>>(
     () => Object.fromEntries(pairMembers.map(m => [m.charId, { fg: mOf(m).quoteColor, mark: mOf(m).quoteMarkColor }])));
@@ -295,14 +300,15 @@ export function RelForm({ initial, auId, myChars, memberNames, existingIds, onSa
 
   const save = async () => {
     if (!name.trim()) { toast('자관 이름을 입력해 주세요'); return; }
-    // 페이지 주소 (v1.9) — 유효성·중복 검사
-    if (isNew && slug) {
+    // 페이지 주소 (v1.9 / 수정도 가능 v2.0) — 유효성·중복 검사
+    if (slug && slug !== (initial?.slug ?? '')) {
       if (!isValidSlug(slug)) { toast('주소는 영문 소문자·숫자·하이픈만 쓸 수 있습니다'); return; }
       if (existingIds?.includes(slug)) { toast('이미 사용 중인 주소입니다 — 다른 주소를 입력해 주세요'); return; }
     }
     const artIds = await Promise.all(arts.map(a => (a.file ? putBlob(a.file) : Promise.resolve(a.ref!))));
     onSave({
-      slug: isNew && slug ? slug : undefined,
+      // 수정에서 정한 주소는 별명으로 (v2.0) — 신규는 rels/new가 이 값을 id로 쓴다
+      slug: slug.trim() || undefined,
       name: name.trim().toUpperCase(),
       catchphrase: catchphrase.trim(),
       kind, visibility, fontId, bodyFontId,
@@ -342,6 +348,7 @@ export function RelForm({ initial, auId, myChars, memberNames, existingIds, onSa
       fullOffsets: pairMembers.length ? fullOffsets : undefined,
       quotes: pairMembers.length ? quotes : undefined,
       nameSizes: pairMembers.length ? nameSizes : undefined,
+      nameBolds: pairMembers.length ? nameBolds : undefined,
       quoteColors: pairMembers.length ? quoteColors : undefined,
       fullFront,
       pickedCharIds: picked,
@@ -527,6 +534,8 @@ export function RelForm({ initial, auId, myChars, memberNames, existingIds, onSa
             {pairMembers.map((m, i) => (
               <div key={m.charId} style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
                 <b style={{ fontSize: 12, width: 92, flexShrink: 0 }}>{i === 0 ? '왼쪽' : '오른쪽'} · {memberNames?.[m.charId] ?? m.charId}</b>
+                <KCheck label="Bold" checked={nameBolds[m.charId] ?? true}
+                  onChange={(v: boolean) => setNameBolds(s => ({ ...s, [m.charId]: v }))} />
                 <KStep value={nameSizes[m.charId] ?? 17}
                   onChange={(v: number) => setNameSizes(s => ({ ...s, [m.charId]: v }))}
                   min={10} max={32} step={1} suffix="px" />
@@ -639,14 +648,16 @@ export function RelForm({ initial, auId, myChars, memberNames, existingIds, onSa
               </div>
             )}
             {/* 페이지 주소 (v1.9) — /rels/{slug}, 비우면 자동 · 중복이면 경고 */}
-            {isNew && (
+            {/* 수정에서도 바꿀 수 있다 (v2.0 사용자 요청) — 비우면 원래 주소(id) 그대로.
+                AU 편집에서는 주소가 base 소관이라 숨긴다 */}
+            {!auObj && (
               <div>
                 <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                   <span style={{ fontSize: 12, color: 'var(--faint)', whiteSpace: 'nowrap' }}>/rels/</span>
-                  <KInput placeholder="페이지 주소 (선택)" value={slug}
+                  <KInput placeholder={isNew ? '페이지 주소 (선택)' : `페이지 주소 (비우면 ${initial?.id})`} value={slug}
                     onChange={e => setSlug(slugify(e.target.value))} style={{ flex: 1 }} />
                 </div>
-                {slug && existingIds?.includes(slug) && (
+                {slug && slug !== (initial?.slug ?? '') && existingIds?.includes(slug) && (
                   <p style={{ margin: '4px 0 0', fontSize: 11, color: 'var(--accent)' }}>이미 사용 중인 주소입니다</p>
                 )}
               </div>
@@ -717,10 +728,10 @@ export function RelForm({ initial, auId, myChars, memberNames, existingIds, onSa
             )}
             <p className="hint" style={{ margin: '2px 0 0' }}>이름 폰트 — 상세 대형 타이틀에 적용</p>
             <KSelect value={fontId} onChange={setFontId}
-              options={fonts.map(f => ({ value: f.id, label: <span style={{ fontFamily: f.family }}>{f.name}</span> }))} />
+              options={fonts.map(f => ({ value: f.id, label: <span style={{ fontFamily: deVarFamily(f.family) }}>{f.name}</span> }))} />
             <p className="hint" style={{ margin: '2px 0 0' }}>본문 폰트 — 카드 소개·타임라인·문답 텍스트에 적용</p>
             <KSelect value={bodyFontId} onChange={setBodyFontId}
-              options={fonts.map(f => ({ value: f.id, label: <span style={{ fontFamily: f.family }}>{f.name}</span> }))} />
+              options={fonts.map(f => ({ value: f.id, label: <span style={{ fontFamily: deVarFamily(f.family) }}>{f.name}</span> }))} />
             <div>
               <label className="k-label">페이지 테마{auObj ? ` — ${auObj.label}` : ''}</label>
               {/* AU 편집 (v1.9) — 기존(원본) 테마 따라가기 / 이 AU 전용 테마 */}

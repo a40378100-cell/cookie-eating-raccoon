@@ -34,20 +34,18 @@ import {
 } from '@/lib/boardStore';
 
 import { renderBody } from '@/lib/sanitize';
-
 import {
   KInput,
   KTextarea,
   KSelect,
   KCheck,
 } from '@/components/ui/Kit';
-
 import {
   CropEditor,
   CropImg,
   CropValue,
 } from '@/components/ui/CropEditor';
-
+import { ConfirmModal } from '@/components/ui/Modal';
 import { RichEditor } from '@/components/ui/RichEditor';
 
 import { useToast } from '@/components/ui/Toast';
@@ -70,6 +68,11 @@ function formatSize(size: number) {
 
   return `${(size / 1024 / 1024).toFixed(1)} MB`;
 }
+
+/** 에디터가 다루지 못해 정리될 만한 태그·속성이 있는가 — 전환 경고 판단 (인트로와 같은 기준) */
+const hasRichHtml = (html: string) =>
+  /<(table|thead|tbody|tr|td|th|div|span|section|article|video|audio|details|summary|font|center)\b/i.test(html)
+  || /\s(style|class|id)\s*=/i.test(html);
 
 function WriteInner() {
   const router = useRouter();
@@ -112,7 +115,9 @@ function WriteInner() {
     useState<'editor' | 'md' | 'html'>('editor');
 
   const [body, setBody] = useState('');
-
+  // HTML 모드 안의 보기 (v2.0 사용자 요청) — 코드 그대로 / 미리보기에서 바로 편집
+  const [htmlView, setHtmlView] = useState<'code' | 'preview'>('code');
+  const [askRich, setAskRich] = useState<null | (() => void)>(null);   // 정리 경고 후 실행할 전환
   const [category, setCategory] = useState('');
 
   React.useEffect(() => {
@@ -126,25 +131,20 @@ function WriteInner() {
 
   const [notice, setNotice] = useState(false);
 
-  const [foldType, setFoldType] =
-    useState<FoldType | 'none'>('none');
+  // 태그 (v2.0 사용자 요청) — 쉼표로 구분해 입력, 저장할 때 배열로
+  const [tagsText, setTagsText] = useState('');
+  const parseTags = (s: string) =>
+    [...new Set(s.split(',').map(t => t.trim().replace(/^#/, '')).filter(Boolean))];
 
-  const [foldLabel, setFoldLabel] =
-    useState('');
+  const [foldType, setFoldType] = useState<FoldType | 'none'>('none');
+  const [foldLabel, setFoldLabel] = useState('');
 
   /* ---------- 티켓 썸네일 ---------- */
-
-  const [thumbSrc, setThumbSrc] =
-    useState<string | undefined>(undefined);
-
-  const [thumbCrop, setThumbCrop] =
-    useState<CropValue | undefined>(undefined);
-
-  const [cropOpen, setCropOpen] =
-    useState(false);
+  const [thumbSrc, setThumbSrc] = useState<string | undefined>(undefined);
+  const [thumbCrop, setThumbCrop] = useState<CropValue | undefined>(undefined);
+  const [cropOpen, setCropOpen] = useState(false);
 
   /* ---------- 본문 이미지 ---------- */
-
   const bodyImages = useMemo(() => {
     const out: string[] = [];
 
@@ -164,60 +164,34 @@ function WriteInner() {
   }, [body]);
 
   useEffect(() => {
-    if (
-      thumbSrc &&
-      !bodyImages.includes(thumbSrc)
-    ) {
+    if (thumbSrc && !bodyImages.includes(thumbSrc)) {
       setThumbSrc(undefined);
       setThumbCrop(undefined);
     }
   }, [bodyImages, thumbSrc]);
 
   /* ---------- 파일 첨부 ---------- */
-
-  const [
-    newFiles,
-    setNewFiles,
-  ] = useState<File[]>([]);
-
-  const [
-    attachments,
-    setAttachments,
-  ] = useState<PostAttachment[]>([]);
-
-  const [
-    uploading,
-    setUploading,
-  ] = useState(false);
-
-  const fileInputRef =
-    useRef<HTMLInputElement>(null);
+  const [newFiles, setNewFiles] = useState<File[]>([]);
+  const [attachments, setAttachments] = useState<PostAttachment[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   /* ---------- 수정 모드 ---------- */
-
   const hydrated = useRef(false);
 
   useEffect(() => {
-    if (
-      !editPid ||
-      !postsLoaded ||
-      hydrated.current
-    ) {
+    if (!editPid || !postsLoaded || hydrated.current) {
       return;
     }
 
-    const p = posts.find(
-      x => x.id === editPid,
-    );
+    const p = posts.find(x => x.id === editPid);
 
     if (!p) return;
 
     hydrated.current = true;
 
     setTitle(p.title);
-
     setBody(p.body);
-
     setWriteMode(
       p.mode === 'md'
         ? 'md'
@@ -225,35 +199,18 @@ function WriteInner() {
           ? 'editor'
           : 'html',
     );
-
     setCategory(p.category);
-
     setSecret(p.secret);
-
     setNotice(p.notice);
-
-    setFoldType(
-      p.fold?.type ?? 'none',
-    );
-
-    setFoldLabel(
-      p.fold?.label ?? '',
-    );
-
+    setFoldType(p.fold?.type ?? 'none');
+    setFoldLabel(p.fold?.label ?? '');
+    setTagsText((p.tags ?? []).join(', '));
     setThumbSrc(p.thumbSrc);
-
     setThumbCrop(p.thumbCrop);
-
-    setAttachments(
-      p.attachments ?? [],
-    );
+    setAttachments(p.attachments ?? []);
 
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    editPid,
-    postsLoaded,
-    posts,
-  ]);
+  }, [editPid, postsLoaded, posts]);
 
   const preview = useMemo(
     () =>
@@ -391,6 +348,7 @@ function WriteInner() {
                               ? foldLabel
                               : undefined,
                         },
+                  tags: parseTags(tagsText),
                   thumbSrc,
                   thumbCrop,
                   attachments:
@@ -452,12 +410,10 @@ function WriteInner() {
 
         comments: [],
 
+        tags: parseTags(tagsText),
         boardId: board.id,
-
         thumbSrc,
-
         thumbCrop,
-
         attachments:
           nextAttachments,
       };
@@ -504,17 +460,12 @@ function WriteInner() {
 
   return (
     <section className="page">
+      {/* 큰 글씨 — 추가 게시판이면 그 이름(메뉴 관리 타이틀·이름이 우선), 누르면 그 게시판으로 복귀
+          (v2.0 사용자 제보 — 「글쓰기에서 큰제목을 눌러도 안 돌아가고, 제목도 원래 것이 뜬다」) */}
       <div className="page-head">
-        <PageTitle>
-          {editing ? 'EDIT' : 'WRITE'}
-        </PageTitle>
-
-        <EditableDesc
-          k="board-write-desc"
-          def="에디터 / Markdown / HTML — 스크립트는 저장 시 자동 제거"
-        />
+        <PageTitle href={boardHref(board.id)}>{board.id === MAIN_BOARD_ID ? (editing ? 'EDIT' : 'WRITE') : board.name}</PageTitle>
+        <EditableDesc k="board-write-desc" def="에디터 / Markdown / HTML — 스크립트는 저장 시 자동 제거" />
       </div>
-
       <div className="write-grid">
         {/* ---------- 좌: 본문 ---------- */}
 
@@ -550,50 +501,59 @@ function WriteInner() {
             </label>
 
             <div className="mini-seg">
+              {/* HTML로 쓴 글을 에디터로 열면 다루지 못하는 태그가 정리된다 — 되돌릴 수 없어 물어본다 (v2.0) */}
               <button
-                className={
-                  writeMode === 'editor'
-                    ? 'on'
-                    : ''
-                }
-                onClick={() =>
-                  setWriteMode(
-                    'editor',
-                  )
-                }
+                className={writeMode === 'editor' ? 'on' : ''}
+                onClick={() => {
+                  if (writeMode === 'html' && hasRichHtml(body)) {
+                    setAskRich(() => () => setWriteMode('editor'));
+                    return;
+                  }
+                  setWriteMode('editor');
+                }}
               >
                 에디터
               </button>
 
               <button
-                className={
-                  writeMode === 'md'
-                    ? 'on'
-                    : ''
-                }
-                onClick={() =>
-                  setWriteMode('md')
-                }
+                className={writeMode === 'md' ? 'on' : ''}
+                onClick={() => {
+                  setWriteMode('md');
+                  setHtmlView('code');
+                }}
               >
                 Markdown
               </button>
 
               <button
-                className={
-                  writeMode === 'html'
-                    ? 'on'
-                    : ''
-                }
-                onClick={() =>
-                  setWriteMode('html')
-                }
+                className={writeMode === 'html' ? 'on' : ''}
+                onClick={() => setWriteMode('html')}
               >
                 HTML
               </button>
             </div>
+            {/* HTML 모드 안 보기 전환 (v2.0 사용자 요청) — 코드 그대로 / 미리보기에서 바로 편집 */}
+            {writeMode === 'html' && (
+              <div className="mini-seg">
+                <button className={htmlView === 'code' ? 'on' : ''} onClick={() => setHtmlView('code')}>코드</button>
+                <button
+                  className={htmlView === 'preview' ? 'on' : ''}
+                  onClick={() => {
+                    if (htmlView === 'preview') return;
+                    if (hasRichHtml(body)) {
+                      setAskRich(() => () => setHtmlView('preview'));
+                      return;
+                    }
+                    setHtmlView('preview');
+                  }}
+                >
+                  미리보기 (편집 가능)
+                </button>
+              </div>
+            )}
           </div>
 
-          {writeMode === 'editor' ? (
+          {writeMode === 'editor' || (writeMode === 'html' && htmlView === 'preview') ? (
             <RichEditor
               value={body}
               onChange={setBody}
@@ -1108,23 +1068,29 @@ function WriteInner() {
         </div>
       </div>
 
-      {/* 대표 썸네일 위치 지정 */}
-      {cropOpen &&
-        thumbSrc && (
-          <CropEditor
-            open
-            src={thumbSrc}
-            aspect="16:9"
-            initial={thumbCrop}
-            onClose={() =>
-              setCropOpen(false)
-            }
-            onApply={c => {
-              setThumbCrop(c);
-              setCropOpen(false);
-            }}
-          />
-        )}
+      {/* HTML → 에디터/편집 미리보기 전환 경고 (v2.0) — 다루지 못하는 태그는 편집 순간 정리된다 */}
+      <ConfirmModal
+        open={askRich !== null}
+        title="여기서 편집하면 일부 태그가 정리됩니다"
+        body="에디터는 굵게·목록·제목·이미지 같은 기본 서식만 다룹니다. 표·div·style·class 등은 편집하는 순간 정리되며 되돌릴 수 없습니다. HTML을 그대로 두려면 취소하세요."
+        onClose={() => setAskRich(null)}
+        buttons={[
+          { label: 'CANCEL', kind: 'ghost', onClick: () => setAskRich(null) },
+          { label: '계속', kind: 'accent', onClick: () => { askRich?.(); setAskRich(null); } },
+        ]}
+      />
+
+      {/* 대표 썸네일 위치 지정 — 16:9 (티켓 스킨) */}
+      {cropOpen && thumbSrc && (
+        <CropEditor
+          open
+          src={thumbSrc}
+          aspect="16:9"
+          initial={thumbCrop}
+          onClose={() => setCropOpen(false)}
+          onApply={c => { setThumbCrop(c); setCropOpen(false); }}
+        />
+      )}
     </section>
   );
 }

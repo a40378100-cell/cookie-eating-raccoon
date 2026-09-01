@@ -1,6 +1,6 @@
 'use client';
 // 메인 위젯 렌더러 (4.0) — DIARY/LATEST/UPCOMING 등은 해당 기능(2·3차) 전까지 데모 데이터
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { WidgetConf, useMainStore, WIDGET_META, decoSlides } from '@/lib/mainStore';
 import { useAuth } from '@/lib/auth';
@@ -112,17 +112,20 @@ export function MenuListWidget() {
   return (
     <div className="panel menu-list wgt-menu">
       {(menuLoaded && boardsLoaded
-        ? buildMenu(menuSet, [...boardEntries(boards), ...sectionMenuEntries(wSecMap), ...linkEntries(wLinks)], { loggedIn: !!wUser, isAdmin: wIsAdmin })
+        ? buildMenu(menuSet, [...boardEntries(boards), ...sectionMenuEntries(wSecMap), ...linkEntries(wLinks)], { loggedIn: !!wUser, isAdmin: wIsAdmin, id: wUser?.id })
         : []).map(m =>
         m.children ? (
           <div key={m.label} className={`mgrp ${open === m.label ? 'open' : ''}`}>
             <a onClick={() => setOpen(o => (o === m.label ? null : m.label))}>{m.label}</a>
             <div className="msub">
-              {m.children.map(c => <a key={c.href} onClick={() => router.push(c.href)}>{c.label}</a>)}
+              {/* 커스텀 링크의 외부 주소는 새 창 (v2.0) — 상단 메뉴와 같은 규칙 */}
+              {m.children.map(c => (
+                <a key={c.href} onClick={() => (/^https?:\/\//.test(c.href) ? window.open(c.href, '_blank') : router.push(c.href))}>{c.label}</a>
+              ))}
             </div>
           </div>
         ) : (
-          <a key={m.label} onClick={() => router.push(m.href!)}>{m.label}</a>
+          <a key={m.label} onClick={() => (/^https?:\/\//.test(m.href!) ? window.open(m.href!, '_blank') : router.push(m.href!))}>{m.label}</a>
         )
       )}
     </div>
@@ -164,7 +167,7 @@ export function DiaryWidget() {
   const [moods] = useLocalList<Mood>('ohome.moods.v1', MOOD_SEED);
   // 메뉴에서 비공개로 둔 다이어리는 위젯에도 안 나온다 (v2.0 사용자 발견 — 위젯으로 새던 것)
   const [menuSet] = useMenuSettings();
-  const viewer = { loggedIn: !!user, isAdmin };
+  const viewer = { loggedIn: !!user, isAdmin, id: user?.id };
   const canSee = canViewHref(menuSet, '/diary', viewer);
   // 비공개 일기는 위젯에 절대 노출되지 않음 — 관리자여도 (4.14)
   const latest = posts
@@ -199,7 +202,7 @@ export function LatestWidget() {
   /* 메뉴에서 비공개로 둔 곳은 빼고 모은다 (v2.0 사용자 발견) — 로드비와 갤러리를 함께 보여 주는
      위젯이라 **소스별로** 따진다. 한쪽만 비공개면 나머지는 그대로 나온다. */
   const [menuSet] = useMenuSettings();
-  const viewer = { loggedIn: !!user, isAdmin };
+  const viewer = { loggedIn: !!user, isAdmin, id: user?.id };
   const seeRoad = canViewHref(menuSet, '/loadb', viewer);
   const seeGal = canViewHref(menuSet, '/gallery', viewer);
   const latest = [
@@ -336,7 +339,7 @@ export function UpcomingWidget() {
      볼 수 있는 스케줄러가 하나도 없을 때만 위젯을 통째로 감춘다. */
   const [menuSet] = useMenuSettings();
   const { list } = useSections();
-  const viewer = { loggedIn: !!user, isAdmin };
+  const viewer = { loggedIn: !!user, isAdmin, id: user?.id };
   const seeSec = (secId?: string) => canViewHref(menuSet, sectionHref('sched', secId ?? MAIN_SEC), viewer);
   const canSee = list('sched').some(s => seeSec(s.id));
   const today = new Date();
@@ -432,16 +435,43 @@ export function FreeTextWidget({ conf }: { conf: WidgetConf }) {
 /* ---------- 장식 이미지 — 패널 없이 이미지만 (장식용) ---------- */
 /** 비율 유지(안 잘림) 렌더 — cover(크롭)와 선택제 (v1.9 사용자 요청)
  *  둥근 모서리는 위젯 박스가 아니라 **이미지 크기**에 맞춰 적용 (v1.9 사용자 피드백 — 여백까지 둥글면 티가 안 남) */
-function ContainImg({ fileRef, rounded }: { fileRef: string; rounded: boolean }) {
+function ContainImg({ fileRef, rounded, onActivate }: {
+  fileRef: string; rounded: boolean; onActivate?: () => void;
+}) {
   const url = useBlobUrl(fileRef);
+  const imgRef = useRef<HTMLImageElement>(null);
+  // 투명 픽셀 판독용 캔버스 — 이미지마다 한 번만 그린다
+  const cacheRef = useRef<{ url: string; c: HTMLCanvasElement } | null>(null);
   if (!url) return null;
+  /* 클릭이 실제 그림 위인지 (v2.0 사용자 요청 — 「투명 영역은 클릭 영역이 아니게」).
+     장식 이미지는 배경이 투명한 PNG가 많다 — 빈 데를 눌러도 링크로 가면 이상하다.
+     픽셀의 투명도를 읽어 거의 투명하면 클릭으로 치지 않는다. 외부 주소 이미지처럼
+     판독이 막히면(캔버스 보안) 이미지 사각형 기준으로만 제한한다. */
+  const hitTest = (e: React.MouseEvent): boolean => {
+    const img = imgRef.current;
+    if (!img || !img.naturalWidth) return true;
+    const r = img.getBoundingClientRect();
+    const x = Math.floor((e.clientX - r.left) / r.width * img.naturalWidth);
+    const y = Math.floor((e.clientY - r.top) / r.height * img.naturalHeight);
+    try {
+      if (!cacheRef.current || cacheRef.current.url !== url) {
+        const c = document.createElement('canvas');
+        c.width = img.naturalWidth; c.height = img.naturalHeight;
+        c.getContext('2d', { willReadFrequently: true })!.drawImage(img, 0, 0);
+        cacheRef.current = { url, c };
+      }
+      return cacheRef.current.c.getContext('2d')!.getImageData(x, y, 1, 1).data[3] > 8;
+    } catch { return true; }
+  };
   return (
     <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
       {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src={url} alt="" draggable={false}
+      <img ref={imgRef} src={url} alt="" draggable={false}
+        onClick={e => { if (onActivate && hitTest(e)) onActivate(); }}
         style={{
           maxWidth: '100%', maxHeight: '100%', width: 'auto', height: 'auto', display: 'block',
           borderRadius: rounded ? 'var(--radius)' : 0,
+          cursor: onActivate ? 'var(--cur-pointer,pointer)' : undefined,
         }} />
     </div>
   );
@@ -476,19 +506,31 @@ export function DecoWidget({ conf }: { conf: WidgetConf }) {
       else router.push(l);
     }
   };
+  // 직접 정한 크기 (v2.0 사용자 요청) — 비우면 지금까지처럼 자리(그리드 칸)를 따라간다
+  const wPx = conf.settings.wPx as number | undefined;
+  const hPx = conf.settings.hPx as number | undefined;
+  const canGo = !editOn && !!cur?.link;
   return (
     <div className="deco-wgt"
       style={{
-        position: 'relative', width: '100%', height: '100%', minHeight: 80, overflow: 'hidden',
-        aspectRatio: conf.h == null ? '1/1' : undefined, // 크기 동결 전 기본 정사각
+        position: 'relative', overflow: 'hidden',
+        width: wPx ? `${wPx}px` : '100%', maxWidth: '100%',
+        height: hPx ? `${hPx}px` : '100%', minHeight: hPx ? undefined : 80,
+        margin: wPx ? '0 auto' : undefined,
+        aspectRatio: conf.h == null && !hPx ? '1/1' : undefined, // 크기 동결 전 기본 정사각
         borderRadius: rounded ? 'var(--radius)' : 0,
-        cursor: !editOn && cur?.link ? 'var(--cur-pointer,pointer)' : undefined,
-      }}
-      onClick={onBody}>
+      }}>
+      {/* 클릭은 이미지 위에서만 (v2.0 사용자 요청) — 예전에는 위젯 칸 전체가 눌렸다.
+          꽉 채움은 이미지가 칸을 채우므로 그대로 칸 전체, 비율 유지는 그림 픽셀 기준(투명 제외) */}
       {cur
         ? (fit === 'contain'
-          ? <ContainImg key={cur.id} fileRef={cur.imgId} rounded={rounded} />
-          : <CroppedBlobImg key={cur.id} fileRef={cur.imgId} crop={cur.crop} ph="" />)
+          ? <ContainImg key={cur.id} fileRef={cur.imgId} rounded={rounded} onActivate={canGo ? onBody : undefined} />
+          : (
+            <div style={{ position: 'absolute', inset: 0, cursor: canGo ? 'var(--cur-pointer,pointer)' : undefined }}
+              onClick={canGo ? onBody : undefined}>
+              <CroppedBlobImg key={cur.id} fileRef={cur.imgId} crop={cur.crop} ph="" />
+            </div>
+          ))
         : (
           <div className="ph" style={{ position: 'absolute', inset: 0 }}>
             <span style={{ fontSize: 10 }}>{isAdmin ? 'DECO — 편집모드에서 우클릭 → 설정' : 'DECO'}</span>
@@ -520,7 +562,7 @@ export function MemoBoardWidget() {
   const [settings] = useMemoSettings();
   // 메뉴에서 비공개로 둔 메모장은 위젯에도 안 나온다 (v2.0)
   const [menuSet] = useMenuSettings();
-  if (!canViewHref(menuSet, '/memo', { loggedIn: !!user, isAdmin })) return null;
+  if (!canViewHref(menuSet, '/memo', { loggedIn: !!user, isAdmin, id: user?.id })) return null;
   return (
     <div className="panel widget" style={{ display: 'flex', flexDirection: 'column' }}>
       <h4>STICKY</h4>
@@ -572,7 +614,7 @@ export function ApplyWidget({ conf }: { conf: WidgetConf }) {
   };
 
   // 훅을 모두 부른 뒤에 판정한다 — 중간에서 빠지면 렌더마다 훅 수가 달라진다
-  if (!canViewHref(menuSet, '/comm-apply', { loggedIn: !!user, isAdmin })) return null;
+  if (!canViewHref(menuSet, '/comm-apply', { loggedIn: !!user, isAdmin, id: user?.id })) return null;
 
   return (
     /* 누르면 관리자든 아니든 신청자 페이지로 간다 (v2.0 사용자 요청).
